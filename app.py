@@ -4,25 +4,24 @@ from PIL import Image
 import math
 import io
 
-# ページ設定
+# ページ設定 (絵文字なし)
 st.set_page_config(page_title="商品ラベルGIFジェネレーター", layout="centered")
 
-# タイトルとリード文
-st.title("✨ 商品ラベルGIFジェネレーター")
+# タイトルとリード文 (絵文字なし)
+st.title("商品ラベルGIFジェネレーター")
 st.markdown("""
 商品ラベルに装飾エフェクトを追加できます。  
 ※現在追加できるのは一種類のみです。
 """)
 
 # --- 設定エリア ---
-st.sidebar.header("⚙️ エフェクト設定")
+st.sidebar.header("エフェクト設定")
 
 # 1. 光の質感設定
 band_width_ratio = st.sidebar.slider("光の幅（ふんわり感）", min_value=0.1, max_value=0.8, value=0.45, step=0.05)
 intensity_ratio = st.sidebar.slider("光の強さ（明るさ）", min_value=0.01, max_value=0.30, value=0.08, step=0.01)
 
 # 2. 速度設定
-# durationは1フレームあたりの表示時間(ms)なので、小さいほど速く、大きいほどゆっくり流れます
 speed_val = st.sidebar.select_slider(
     "光の流れる速度",
     options=[100, 80, 60, 40, 20],
@@ -58,6 +57,26 @@ def process_frame(base_img_array, t, band_w, high_w, intensity, theta, u_min, u_
     result_array = 1.0 - (1.0 - base_img_array) * (1.0 - intensity_3d)
     return np.clip(result_array * 255.0, 0, 255).astype(np.uint8)
 
+def generate_gif(img_array, num_frames, band_w, high_w, intensity, theta, u_min, u_max, duration):
+    """GIFを生成してバイトデータを返す関数"""
+    frames = []
+    for i in range(num_frames):
+        t = i / (num_frames - 1)
+        frame_data = process_frame(img_array, t, band_w, high_w, intensity, theta, u_min, u_max)
+        frames.append(Image.fromarray(frame_data))
+    
+    gif_io = io.BytesIO()
+    frames[0].save(
+        gif_io, 
+        format='GIF', 
+        save_all=True, 
+        append_images=frames[1:], 
+        duration=duration,
+        loop=0, 
+        optimize=False
+    )
+    return gif_io.getvalue()
+
 if uploaded_file is not None:
     # 画像の読み込み
     image = Image.open(uploaded_file).convert('RGB')
@@ -79,46 +98,28 @@ if uploaded_file is not None:
     band_w = w * band_width_ratio
     high_w = w * (band_width_ratio * 0.18)
 
-    # --- プレビュー表示 ---
-    st.subheader("🖼️ 仕上がりプレビュー")
-    # 進行度0.5（ちょうど真ん中に光が来た状態）を表示
-    preview_frame = process_frame(img_array, 0.5, band_w, high_w, intensity_ratio, theta, u_min, u_max)
-    st.image(preview_frame, caption="光が当たった時の質感（静止画プレビュー）", use_container_width=False, width=300)
-    st.info("左側のスライダーを動かすとプレビューが更新されます。")
+    # --- 仕上がりプレビュー (動的GIFプレビュー) ---
+    st.subheader("仕上がりプレビュー")
+    
+    # プレビュー用GIF生成 (スライダー変更で再実行される)
+    # パフォーマンスを考慮し、プレビューのフレーム数を少し減らす（例: 30フレーム）ことも検討可能
+    # ここでは60フレームのまま実装
+    preview_gif_bytes = generate_gif(
+        img_array, num_frames=60, band_w=band_w, high_w=high_w, 
+        intensity=intensity_ratio, theta=theta, u_min=u_min, u_max=u_max, 
+        duration=speed_val
+    )
+    
+    st.image(preview_gif_bytes, caption="仕上がりプレビュー（GIF）", width=300)
+    st.info("左側のスライダーを動かすとプレビューが自動更新されます。")
 
     # --- 本番生成 ---
-    if st.button("この設定でGIFを生成する", type="primary"):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        frames = []
-        num_frames = 60 # フレーム数
-        
-        for i in range(num_frames):
-            t = i / (num_frames - 1)
-            frame_data = process_frame(img_array, t, band_w, high_w, intensity_ratio, theta, u_min, u_max)
-            frames.append(Image.fromarray(frame_data))
-            progress_bar.progress((i + 1) / num_frames)
-            status_text.text(f"フレーム作成中... {i+1}/{num_frames}")
-        
-        # GIF書き出し
-        gif_io = io.BytesIO()
-        frames[0].save(
-            gif_io, 
-            format='GIF', 
-            save_all=True, 
-            append_images=frames[1:], 
-            duration=speed_val, # スライダーで調整した速度を反映
-            loop=0, 
-            optimize=False
-        )
-        gif_bytes = gif_io.getvalue()
-        
-        status_text.text("生成完了！")
-        st.image(gif_bytes, caption="完成したアニメーション", width=300)
+    if st.button("GIFを最終生成する", type="primary"):
+        # プレビューで生成されたGIFデータを再利用する
+        gif_bytes = preview_gif_bytes
         
         st.download_button(
-            label="📥 GIFをダウンロード",
+            label="GIFをダウンロード",
             data=gif_bytes,
             file_name="product_label_shine.gif",
             mime="image/gif"
