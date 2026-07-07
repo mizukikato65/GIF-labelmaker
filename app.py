@@ -68,8 +68,6 @@ def process_frame_shine(base_img_array, t, band_w, high_w, intensity, theta, u_m
 def process_frame_spotlight(base_img_array, t, band_w, intensity):
     """スポットライト（円形の光）の計算"""
     h, w, _ = base_img_array.shape
-    
-    # イージングと移動範囲 (左から右へ水平移動)
     eased_t = t ** 1.5
     current_x = -w * 0.4 + (w * 1.8) * eased_t
     current_y = h / 2.0
@@ -79,7 +77,6 @@ def process_frame_spotlight(base_img_array, t, band_w, intensity):
     elif t > 0.85: fade = (1.0 - t) / 0.15
     
     y_indices, x_indices = np.indices((h, w))
-    # 中心からの距離を計算
     dist = np.sqrt((x_indices - current_x)**2 + (y_indices - current_y)**2)
     
     spot_intensity = np.exp(- (dist / band_w)**2) * (intensity * 1.5) * fade
@@ -90,10 +87,7 @@ def process_frame_spotlight(base_img_array, t, band_w, intensity):
 
 def process_frame_pulse(base_img_array, t, intensity):
     """パルス（全体の発光）の計算"""
-    # サイン波を使って、0 -> 1 -> 0 へと滑らかに変化させる
     cycle = math.sin(t * math.pi)
-    
-    # パルスは全体が明るくなるため、強さを少し抑える
     pulse_intensity = (intensity * 0.8) * cycle
     intensity_3d = np.full_like(base_img_array, pulse_intensity)
     
@@ -101,39 +95,37 @@ def process_frame_pulse(base_img_array, t, intensity):
     return np.clip(result_array * 255.0, 0, 255).astype(np.uint8)
 
 def process_frame_kirakira(base_img_array, t, band_w, intensity):
-    """キラキラ（不規則な光る点）の計算"""
+    """キラキラ（滑らかな明滅）の計算"""
     h, w, _ = base_img_array.shape
     
-    # キラキラの不透明度全体 (ループのフェードは不要。キラキラ自体が出現消失するため)
-    # キラキラは不規則に出現消失するように見える
+    # 乱数シードを固定し、全フレームでキラキラの位置と明滅のタイミングを統一する
+    np.random.seed(42)
     
-    y_indices, x_indices = np.indices((h, w))
-    sparkle_intensity = np.zeros_like(x_indices, dtype=np.float32)
-
-    num_sparkles = 40  # 1フレームあたりのキラキラの数
-    
-    # 各フレームで異なる乱数シードを使用
-    # num_frames = 60 と仮定。t=i/(60-1)。iを求める。
-    frame_index = int(t * (60 - 1))
-    np.random.seed(frame_index)
-    
-    # キラキラの位置をランダムに生成
+    num_sparkles = 40
+    # キラキラの固定位置
     positions = np.random.rand(num_sparkles, 2)
     positions[:, 0] *= w
     positions[:, 1] *= h
     
-    # 各キラキラの強さをランダムに生成
-    individual_intensities = np.random.rand(num_sparkles) * 2.0  # 強度をさらに強調
+    # 位相（明滅のスタート地点）をランダムにずらす
+    phases = np.random.rand(num_sparkles) * 2 * math.pi
+    # アニメーションループが完璧に繋がるよう、明滅の速さは整数倍（1〜3回）に設定
+    speeds = np.random.randint(1, 4, size=num_sparkles)
+    
+    y_indices, x_indices = np.indices((h, w))
+    sparkle_intensity = np.zeros_like(x_indices, dtype=np.float32)
     
     for i in range(num_sparkles):
         dist = np.sqrt((x_indices - positions[i, 0])**2 + (y_indices - positions[i, 1])**2)
-        # 各キラキラを小さなガウス分布として描画。幅を少し狭く。
-        sparkle_spot_intensity = np.exp(- (dist / (band_w * 0.5))**2) * (intensity * 2.0) * individual_intensities[i]
+        
+        # サイン波を利用して 0.0 〜 1.0 を滑らかに行き来させる
+        twinkle = (math.sin(t * 2 * math.pi * speeds[i] + phases[i]) + 1.0) / 2.0
+        
+        # キラキラのサイズと明るさ
+        sparkle_spot_intensity = np.exp(- (dist / (band_w * 0.5))**2) * (intensity * 2.5) * twinkle
         sparkle_intensity += sparkle_spot_intensity
         
-    # キラキラの強さをクリップ
     sparkle_intensity = np.clip(sparkle_intensity, 0, 1.0)
-    
     intensity_3d = np.repeat(sparkle_intensity[:, :, np.newaxis], 3, axis=2)
     
     result_array = 1.0 - (1.0 - base_img_array) * (1.0 - intensity_3d)
@@ -148,76 +140,4 @@ def generate_gif(img_array, num_frames, effect_name, band_w, high_w, intensity, 
         if effect_name == "シャイン（斜めの光）":
             frame_data = process_frame_shine(img_array, t, band_w, high_w, intensity, theta, u_min, u_max)
         elif effect_name == "スポットライト（円形の光）":
-            frame_data = process_frame_spotlight(img_array, t, band_w, intensity)
-        elif effect_name == "パルス（全体の発光）":
-            frame_data = process_frame_pulse(img_array, t, intensity)
-        elif effect_name == "キラキラ光る（不規則な点）":
-            # キラキラ用に質感設定を調整。幅を小さく、強度を大きく。
-            frame_data = process_frame_kirakira(img_array, t, band_w * 0.4, intensity * 2.0)
-            
-        frames.append(Image.fromarray(frame_data))
-    
-    gif_io = io.BytesIO()
-    frames[0].save(
-        gif_io, 
-        format='GIF', 
-        save_all=True, 
-        append_images=frames[1:], 
-        duration=duration,
-        loop=0, 
-        optimize=False
-    )
-    return gif_io.getvalue()
-
-# --- メイン処理 ---
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert('RGB')
-    
-    target_width = 300
-    orig_w, orig_h = image.size
-    target_height = int(orig_h * (target_width / orig_w))
-    img_resized = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
-    img_array = np.array(img_resized).astype(np.float32) / 255.0
-    
-    h, w, _ = img_array.shape
-    angle_deg = 35 
-    theta = math.radians(angle_deg)
-    u_min = -w * 0.6
-    u_max = w * math.cos(theta) + h * math.sin(theta) + w * 0.6
-    
-    band_w = w * band_width_ratio
-    high_w = w * (band_width_ratio * 0.18)
-
-    st.subheader("仕上がりプレビュー")
-    
-    # パフォーマンスを考慮し、キラキラの場合はプレビューのフレーム数を少し減らす。
-    # 既存の generate_gif は60フレームでプレビューを生成するため、スライダー変更で再計算が走る。
-    # キラキラの場合は、各フレームで乱数を再計算するため、プレビューの表示が遅くなる可能性がある。
-    # これを回避するために、キラキラの場合はプレビューのフレーム数を30に減らす。
-    preview_num_frames = 60
-    if effect_type == "キラキラ光る（不規則な点）":
-        preview_num_frames = 30
-        
-    preview_gif_bytes = generate_gif(
-        img_array, num_frames=preview_num_frames, effect_name=effect_type, 
-        band_w=band_w, high_w=high_w, intensity=intensity_ratio, 
-        theta=theta, u_min=u_min, u_max=u_max, duration=speed_val
-    )
-    
-    st.image(preview_gif_bytes, caption="仕上がりプレビュー（GIF）", width=300)
-    st.info("左側のスライダーやエフェクト種類を変更するとプレビューが自動更新されます。")
-
-    if st.button("GIFをダウンロード", type="primary"):
-        # ダウンロード用のGIFは、常に60フレームで生成する。
-        gif_bytes = generate_gif(
-            img_array, num_frames=60, effect_name=effect_type, 
-            band_w=band_w, high_w=high_w, intensity=intensity_ratio, 
-            theta=theta, u_min=u_min, u_max=u_max, duration=speed_val
-        )
-        
-        st.download_button(
-            label="ダウンロードを実行",
-            data=gif_bytes,
-            file_name=f"label_effect_{effect_type[:4]}.gif",
-            mime="image/gif"
-        )
+            frame_data = process_frame_spotlight(img_array, t, band_
