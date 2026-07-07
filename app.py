@@ -140,4 +140,62 @@ def generate_gif(img_array, num_frames, effect_name, band_w, high_w, intensity, 
         if effect_name == "シャイン（斜めの光）":
             frame_data = process_frame_shine(img_array, t, band_w, high_w, intensity, theta, u_min, u_max)
         elif effect_name == "スポットライト（円形の光）":
-            frame_data = process_frame_spotlight(img_array, t, band_
+            frame_data = process_frame_spotlight(img_array, t, band_w, intensity)
+        elif effect_name == "パルス（全体の発光）":
+            frame_data = process_frame_pulse(img_array, t, intensity)
+        elif effect_name == "キラキラ光る（不規則な点）":
+            frame_data = process_frame_kirakira(img_array, t, band_w * 0.4, intensity * 2.0)
+            
+        frames.append(Image.fromarray(frame_data))
+    
+    gif_io = io.BytesIO()
+    frames[0].save(
+        gif_io, 
+        format='GIF', 
+        save_all=True, 
+        append_images=frames[1:], 
+        duration=duration,
+        loop=0, 
+        optimize=False
+    )
+    return gif_io.getvalue()
+
+# --- メイン処理 ---
+if uploaded_file is not None:
+    image = Image.open(uploaded_file).convert('RGB')
+    
+    target_width = 300
+    orig_w, orig_h = image.size
+    target_height = int(orig_h * (target_width / orig_w))
+    img_resized = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+    img_array = np.array(img_resized).astype(np.float32) / 255.0
+    
+    h, w, _ = img_array.shape
+    angle_deg = 35 
+    theta = math.radians(angle_deg)
+    u_min = -w * 0.6
+    u_max = w * math.cos(theta) + h * math.sin(theta) + w * 0.6
+    
+    band_w = w * band_width_ratio
+    high_w = w * (band_width_ratio * 0.18)
+
+    st.subheader("仕上がりプレビュー")
+    
+    # プレビュー生成（キラキラの場合も滑らかさを確認できるよう60フレームに戻しています）
+    preview_gif_bytes = generate_gif(
+        img_array, num_frames=60, effect_name=effect_type, 
+        band_w=band_w, high_w=high_w, intensity=intensity_ratio, 
+        theta=theta, u_min=u_min, u_max=u_max, duration=speed_val
+    )
+    
+    st.image(preview_gif_bytes, caption="仕上がりプレビュー（GIF）", width=300)
+    st.info("左側のスライダーやエフェクト種類を変更するとプレビューが自動更新されます。")
+
+    # そのまま即座にダウンロードできるようにUIを調整
+    st.download_button(
+        label="完成したGIFをダウンロード",
+        data=preview_gif_bytes,
+        file_name=f"label_effect_{effect_type[:4]}.gif",
+        mime="image/gif",
+        type="primary"
+    )
