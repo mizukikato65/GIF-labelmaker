@@ -20,13 +20,13 @@ st.sidebar.header("エフェクト設定")
 # エフェクトの種類の選択
 effect_type = st.sidebar.selectbox(
     "エフェクトの種類",
-    ["シャイン（斜めの光）", "スポットライト（円形の光）", "パルス（全体の発光）"]
+    ["シャイン（斜めの光）", "スポットライト（円形の光）", "パルス（全体の発光）", "キラキラ光る（不規則な点）"]
 )
 
 st.sidebar.markdown("---")
 
 # 光の質感設定
-band_width_ratio = st.sidebar.slider("光の幅（ふんわり感）", min_value=0.1, max_value=0.8, value=0.45, step=0.05)
+band_width_ratio = st.sidebar.slider("光の幅（ふんわり感/点サイズ）", min_value=0.1, max_value=0.8, value=0.45, step=0.05)
 intensity_ratio = st.sidebar.slider("光の強さ（明るさ）", min_value=0.01, max_value=0.30, value=0.08, step=0.01)
 
 # 速度設定
@@ -100,6 +100,45 @@ def process_frame_pulse(base_img_array, t, intensity):
     result_array = 1.0 - (1.0 - base_img_array) * (1.0 - intensity_3d)
     return np.clip(result_array * 255.0, 0, 255).astype(np.uint8)
 
+def process_frame_kirakira(base_img_array, t, band_w, intensity):
+    """キラキラ（不規則な光る点）の計算"""
+    h, w, _ = base_img_array.shape
+    
+    # キラキラの不透明度全体 (ループのフェードは不要。キラキラ自体が出現消失するため)
+    # キラキラは不規則に出現消失するように見える
+    
+    y_indices, x_indices = np.indices((h, w))
+    sparkle_intensity = np.zeros_like(x_indices, dtype=np.float32)
+
+    num_sparkles = 40  # 1フレームあたりのキラキラの数
+    
+    # 各フレームで異なる乱数シードを使用
+    # num_frames = 60 と仮定。t=i/(60-1)。iを求める。
+    frame_index = int(t * (60 - 1))
+    np.random.seed(frame_index)
+    
+    # キラキラの位置をランダムに生成
+    positions = np.random.rand(num_sparkles, 2)
+    positions[:, 0] *= w
+    positions[:, 1] *= h
+    
+    # 各キラキラの強さをランダムに生成
+    individual_intensities = np.random.rand(num_sparkles) * 2.0  # 強度をさらに強調
+    
+    for i in range(num_sparkles):
+        dist = np.sqrt((x_indices - positions[i, 0])**2 + (y_indices - positions[i, 1])**2)
+        # 各キラキラを小さなガウス分布として描画。幅を少し狭く。
+        sparkle_spot_intensity = np.exp(- (dist / (band_w * 0.5))**2) * (intensity * 2.0) * individual_intensities[i]
+        sparkle_intensity += sparkle_spot_intensity
+        
+    # キラキラの強さをクリップ
+    sparkle_intensity = np.clip(sparkle_intensity, 0, 1.0)
+    
+    intensity_3d = np.repeat(sparkle_intensity[:, :, np.newaxis], 3, axis=2)
+    
+    result_array = 1.0 - (1.0 - base_img_array) * (1.0 - intensity_3d)
+    return np.clip(result_array * 255.0, 0, 255).astype(np.uint8)
+
 def generate_gif(img_array, num_frames, effect_name, band_w, high_w, intensity, theta, u_min, u_max, duration):
     """選択されたエフェクトに応じてGIFを生成する関数"""
     frames = []
@@ -112,6 +151,9 @@ def generate_gif(img_array, num_frames, effect_name, band_w, high_w, intensity, 
             frame_data = process_frame_spotlight(img_array, t, band_w, intensity)
         elif effect_name == "パルス（全体の発光）":
             frame_data = process_frame_pulse(img_array, t, intensity)
+        elif effect_name == "キラキラ光る（不規則な点）":
+            # キラキラ用に質感設定を調整。幅を小さく、強度を大きく。
+            frame_data = process_frame_kirakira(img_array, t, band_w * 0.4, intensity * 2.0)
             
         frames.append(Image.fromarray(frame_data))
     
@@ -148,9 +190,16 @@ if uploaded_file is not None:
 
     st.subheader("仕上がりプレビュー")
     
-    # 選択されたエフェクトタイプを渡してプレビュー生成
+    # パフォーマンスを考慮し、キラキラの場合はプレビューのフレーム数を少し減らす。
+    # 既存の generate_gif は60フレームでプレビューを生成するため、スライダー変更で再計算が走る。
+    # キラキラの場合は、各フレームで乱数を再計算するため、プレビューの表示が遅くなる可能性がある。
+    # これを回避するために、キラキラの場合はプレビューのフレーム数を30に減らす。
+    preview_num_frames = 60
+    if effect_type == "キラキラ光る（不規則な点）":
+        preview_num_frames = 30
+        
     preview_gif_bytes = generate_gif(
-        img_array, num_frames=60, effect_name=effect_type, 
+        img_array, num_frames=preview_num_frames, effect_name=effect_type, 
         band_w=band_w, high_w=high_w, intensity=intensity_ratio, 
         theta=theta, u_min=u_min, u_max=u_max, duration=speed_val
     )
@@ -159,9 +208,16 @@ if uploaded_file is not None:
     st.info("左側のスライダーやエフェクト種類を変更するとプレビューが自動更新されます。")
 
     if st.button("GIFをダウンロード", type="primary"):
+        # ダウンロード用のGIFは、常に60フレームで生成する。
+        gif_bytes = generate_gif(
+            img_array, num_frames=60, effect_name=effect_type, 
+            band_w=band_w, high_w=high_w, intensity=intensity_ratio, 
+            theta=theta, u_min=u_min, u_max=u_max, duration=speed_val
+        )
+        
         st.download_button(
             label="ダウンロードを実行",
-            data=preview_gif_bytes,
+            data=gif_bytes,
             file_name=f"label_effect_{effect_type[:4]}.gif",
             mime="image/gif"
         )
